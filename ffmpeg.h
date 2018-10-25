@@ -1,8 +1,8 @@
 #ifndef FFMPEG_H
 #define FFMPEG_H
 
-#include "blockingqueue.h"
 #include <assert.h>
+#include "BlockingQueue.h"
 
 extern "C"{
 #include "libavcodec/avcodec.h"
@@ -23,21 +23,22 @@ public:
 
     int open_input_source(const char *url);
 
-    void data_subcontracting(BlockingQueue<AVPacket *> &videoqueue,BlockingQueue<AVPacket *> &audioqueue);
+    void data_subcontracting(BlockingQueue<AVPacket*> &videoqueue,
+                             BlockingQueue<AVPacket*> &audioqueue);
 
-    void decode_video_frame(AVPacket* &pkt);
-    void decode_audio_frame(AVPacket* &pkt);
+    void decode_video_frame(AVPacket* &pkt, AVFrame* &dst_frame);
+    void decode_audio_frame(AVPacket* &pkt, AVFrame* &dst_frame);
 
     int init_converted_video_frame();
     int init_converted_audio_frame();
 
-    int video_frame_swr_convert(const AVFrame *srcFrame);
-    int audio_frame_swr_convert(const AVFrame *srcFrame);
+    int video_frame_swr_convert(const AVFrame* src_frame);
+    int audio_frame_swr_convert(const AVFrame* src_frame);
 
-    double get_video_frame_pts(const AVFrame *srcFrame);
-    double get_audio_frame_pts(const AVFrame *srcFrame);
+    double get_video_frame_pts(const AVFrame* src_frame);
+    double get_audio_frame_pts(const AVFrame* src_frame);
 
-    double synchronize(AVFrame *srcFrame, double pts);
+    double synchronize(AVFrame* src_frame, double pts);
 
     int release();
 

@@ -1,6 +1,6 @@
 #include "ffmpeg.h"
 
-FFmpeg::FFmpeg(){
+FFmpeg::FFmpeg() {
     m_format_ctx = nullptr;
     m_video_codec_ctx = nullptr;
     m_audio_codec_ctx = nullptr;
@@ -8,7 +8,7 @@ FFmpeg::FFmpeg(){
     m_audio_stream = -1;
 }
 
-int FFmpeg::init(){
+int FFmpeg::init() {
     /* Initialize all components */
     av_register_all();
 
@@ -24,17 +24,17 @@ int FFmpeg::init(){
     return 0;
 }
 
-int FFmpeg::open_input_source(const char *url){
+int FFmpeg::open_input_source(const char *url) {
     int ret = -1;
 
     ret = avformat_open_input(&m_format_ctx, url, NULL, NULL);
-    if(ret != 0){
+    if (ret != 0) {
         perror("avformat_open_input");
         return ret;
     }
 
     ret = avformat_find_stream_info(m_format_ctx, NULL);
-    if(ret < 0){
+    if (ret < 0) {
         perror("avformat_find_stream_info");
         return ret;
     }
@@ -48,20 +48,20 @@ int FFmpeg::open_input_source(const char *url){
     /* The number of streams that resource contains */
     unsigned int stream_nums = m_format_ctx->nb_streams;
 
-    for(int i = 0; i < (int)stream_nums; i++){
+    for(int i = 0; i < (int)stream_nums; i++) {
         AVCodecContext *codec_ctx = m_format_ctx->streams[i]->codec;
 
         /* Find video codec*/
-        if(m_format_ctx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO){
+        if (m_format_ctx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO) {
             m_video_stream = i;
             m_video_codec_ctx = codec_ctx;
             m_video_codec = avcodec_find_decoder(codec_ctx->codec_id);
-            if(!m_video_codec){
+            if (!m_video_codec) {
                 printf("No matching video decoder\n");
             }
             else{
                 ret = avcodec_open2(codec_ctx, m_video_codec, NULL);
-                if(ret != 0){
+                if (ret != 0) {
                     char buf[1024] = { 0 };
                     av_strerror(ret, buf, sizeof(buf));
                     printf("error: %s\n",buf);
@@ -71,16 +71,16 @@ int FFmpeg::open_input_source(const char *url){
         }
 
         /* Find audio codec */
-        if(m_format_ctx->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO){
+        if (m_format_ctx->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO) {
             m_audio_stream = i;
             m_audio_codec_ctx = codec_ctx;
             m_audio_codec = avcodec_find_decoder(codec_ctx->codec_id);
-            if(!m_audio_codec){
+            if (!m_audio_codec) {
                 printf("No matching audio decoder\n");
             }
             else{
                 ret = avcodec_open2(codec_ctx, m_audio_codec, NULL);
-                if(ret != 0){
+                if (ret != 0) {
                     char buf[1024] = { 0 };
                     av_strerror(ret, buf, sizeof(buf));
                     printf("error: %s\n",buf);
@@ -94,7 +94,7 @@ int FFmpeg::open_input_source(const char *url){
     return 0;
 }
 
-int FFmpeg::init_converted_video_frame(){
+int FFmpeg::init_converted_video_frame() {
     m_converted_video_buffer_size = av_image_get_buffer_size(
                 AV_PIX_FMT_RGB32,
                 m_video_codec_ctx->width,
@@ -122,11 +122,11 @@ int FFmpeg::init_converted_video_frame(){
                 m_video_codec_ctx->height,
                 AV_PIX_FMT_RGB32,
                 SWS_BICUBIC,
-                NULL, NULL, NULL);
+                nullptr, nullptr, nullptr);
     return 0;
 }
 
-int FFmpeg::init_converted_audio_frame(){
+int FFmpeg::init_converted_audio_frame() {
     m_original_ch_layout = m_audio_codec_ctx->channel_layout;
     m_convert_ch_layout = AV_CH_LAYOUT_STEREO;
 
@@ -152,30 +152,39 @@ int FFmpeg::init_converted_audio_frame(){
 }
 
 /* get datas from source stream and decode */
-void FFmpeg::data_subcontracting(BlockingQueue<AVPacket *> &videoqueue, BlockingQueue<AVPacket *> &audioqueue){
+void FFmpeg::data_subcontracting(BlockingQueue<AVPacket *> &videoqueue,
+                                 BlockingQueue<AVPacket *> &audioqueue) {
     /* Allocate a packet */
-    AVPacket *packet = (AVPacket *)malloc(sizeof(AVPacket));
-    av_init_packet(packet);
-
-    while(av_read_frame(m_format_ctx, packet) == 0){
+    AVPacket *packet = av_packet_alloc();
+    while (av_read_frame(m_format_ctx, packet) == 0) {
+        AVPacket *pkt = av_packet_alloc();
+        if (av_packet_ref(pkt, packet) < 0) {
+            av_packet_free(&pkt);
+            continue;
+        }
         /* Convert to output video frame  */
-        if(packet->stream_index == m_video_stream){
+        if (packet->stream_index == m_video_stream) {
             /* Push the decoded video frame into the queue, must be free after used */
-            videoqueue.push(packet);
+            videoqueue.push(pkt);
         }
 
         /* Convert to output audio frame  */
-        else if(packet->stream_index == m_audio_stream){
+        else if (packet->stream_index == m_audio_stream) {
             /* Push the decoded audio frame into the queue, must be free after used */
-            audioqueue.push(packet);
+            audioqueue.push(pkt);
+        }
+        else{
+            av_packet_unref(pkt);
+            av_packet_free(&pkt);
         }
 
         av_packet_unref(packet);
+        cout<<videoqueue.size()<<" "<<audioqueue.size()<<endl;
     }
     av_packet_free(&packet);
 }
 
-void FFmpeg::decode_video_frame(AVPacket* &pkt){
+void FFmpeg::decode_video_frame(AVPacket* &pkt, AVFrame* &dst_frame) {
     int ret = -1;
     ret = avcodec_send_packet(m_video_codec_ctx, pkt);
     if (ret < 0) {
@@ -191,14 +200,15 @@ void FFmpeg::decode_video_frame(AVPacket* &pkt){
             fprintf(stderr, "Error during decoding\n");
             return;
         }
-        else
+        else{
+            av_frame_ref(dst_frame, m_video_frame);
             break;
+        }
     }
-    cout<<m_video_frame->pts<<endl;
-    //av_frame_unref(m_video_frame);
+    av_frame_unref(m_video_frame);
 }
 
-void FFmpeg::decode_audio_frame(AVPacket* &pkt){
+void FFmpeg::decode_audio_frame(AVPacket* &pkt, AVFrame* &dst_frame) {
     int ret = -1;
     ret = avcodec_send_packet(m_audio_codec_ctx, pkt);
     if (ret < 0) {
@@ -214,19 +224,20 @@ void FFmpeg::decode_audio_frame(AVPacket* &pkt){
             fprintf(stderr, "Error during decoding\n");
             return;
         }
-        else
+        else{
+            av_frame_ref(dst_frame, m_audio_frame);
             break;
+        }
     }
-    cout<<m_audio_frame->pts<<endl;
-    //av_frame_unref(m_audio_frame);
+    av_frame_unref(m_audio_frame);
 }
 
 /* video frame swr convert*/
-int FFmpeg::video_frame_swr_convert(const AVFrame *srcFrame){
+int FFmpeg::video_frame_swr_convert(const AVFrame* src_frame) {
     int ret = -1;
     ret = sws_scale(m_video_convert_ctx,
-                    (const uint8_t* const*)srcFrame->data,
-                    srcFrame->linesize,
+                    (const uint8_t* const*)src_frame->data,
+                    src_frame->linesize,
                     0,
                     m_video_codec_ctx->height,
                     m_converted_video_frame->data,
@@ -235,38 +246,38 @@ int FFmpeg::video_frame_swr_convert(const AVFrame *srcFrame){
 }
 
 /* audio frame swr convert*/
-int FFmpeg::audio_frame_swr_convert(const AVFrame *srcFrame){
+int FFmpeg::audio_frame_swr_convert(const AVFrame* src_frame) {
     int ret = -1;
     ret = swr_convert(m_audio_convert_ctx,
                 &m_converted_audio_buffer,
                 m_convert_sample_rate * 2,
-                (const uint8_t **)srcFrame->data,
-                srcFrame->nb_samples);
+                (const uint8_t **)src_frame->data,
+                src_frame->nb_samples);
 
     m_converted_audio_buffer_size = av_samples_get_buffer_size(NULL,
                                                                m_nb_channels,
-                                                               srcFrame->nb_samples,
+                                                               src_frame->nb_samples,
                                                                m_convert_sample_fmt,1
                                                                );
     return ret;
 }
 
-double FFmpeg::get_video_frame_pts(const AVFrame *srcFrame){
+double FFmpeg::get_video_frame_pts(const AVFrame* src_frame) {
     double pts;
-    if ((pts = av_frame_get_best_effort_timestamp(srcFrame)) == AV_NOPTS_VALUE)
+    if ((pts = av_frame_get_best_effort_timestamp(src_frame)) == AV_NOPTS_VALUE)
         pts = 0;
     pts *= av_q2d(m_format_ctx->streams[m_video_stream]->time_base);
     pts = synchronize(m_converted_video_frame, pts);
     return pts;
 }
 
-double FFmpeg::get_audio_frame_pts(const AVFrame *srcFrame){
-    double pts= srcFrame->pkt_pts * av_q2d(m_format_ctx->streams[m_audio_stream]->time_base);
+double FFmpeg::get_audio_frame_pts(const AVFrame* src_frame) {
+    double pts= src_frame->pkt_pts * av_q2d(m_format_ctx->streams[m_audio_stream]->time_base);
     return pts;
 }
 
 /* for synchronize the video and audio */
-double FFmpeg::synchronize(AVFrame *srcFrame, double pts)
+double FFmpeg::synchronize(AVFrame *src_frame, double pts)
 {
     double frame_delay;
 
@@ -276,7 +287,7 @@ double FFmpeg::synchronize(AVFrame *srcFrame, double pts)
         pts = video_clock; // Don't get pts,set it to video clock
 
     frame_delay = av_q2d(m_format_ctx->streams[m_audio_stream]->codec->time_base);
-    frame_delay += srcFrame->repeat_pict * (frame_delay * 0.5);
+    frame_delay += src_frame->repeat_pict * (frame_delay * 0.5);
 
     video_clock += frame_delay;
 
@@ -300,4 +311,26 @@ int FFmpeg::release() {
     avformat_close_input(&m_format_ctx);
     return 0;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
